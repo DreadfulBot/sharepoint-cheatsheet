@@ -27,6 +27,28 @@
     - [List instance of DocLib](#list-instance-of-doclib)
   - [Lookup fields](#lookup-fields)
     - [Set up lookup field](#set-up-lookup-field)
+  - [Working with lists](#working-with-lists)
+    - [Resolving list](#resolving-list)
+    - [Deleting data](#deleting-data)
+      - [Batch delete](#batch-delete)
+    - [Getting items](#getting-items)
+      - [All items](#all-items)
+      - [Simple filtering](#simple-filtering)
+      - [Filter by user-field](#filter-by-user-field)
+    - [Adding/updating items](#addingupdating-items)
+    - [Resolving field values](#resolving-field-values)
+      - [SPUser](#spuser)
+      - [LookupValue](#lookupvalue)
+      - [DateTime](#datetime)
+      - [Boolean](#boolean-1)
+      - [Number](#number-1)
+  - [Working with users](#working-with-users)
+    - [Adding user claims to web](#adding-user-claims-to-web)
+    - [Getting name without domain](#getting-name-without-domain)
+  - [TimerJobs](#timerjobs)
+    - [Feature activation](#feature-activation)
+  - [Unit testing](#unit-testing)
+    - [Running test case](#running-test-case)
 
 ---
 
@@ -50,9 +72,7 @@ var allEmployees = JsonConvert.DeserializeObject<EmployeesSearchResult>(fileCont
 ### Registering Wcf-service
 
 Add Mapped folder -> ISAPI
-
 Add those files here:
-
 ## WebService.svc
 
 ```c#
@@ -375,5 +395,284 @@ private void SetUpLookupField(SPField field, SPList list)
 {
     var lookup = field as SPFieldLookup;
     lookup.UpdateLookupReferences(list.ParentWeb, list);
+}
+```
+
+## Working with lists
+
+### Resolving list
+
+Bulletproof behavior - get list by it's url with that utility:
+
+```c#
+// utility
+public static SPList GetListOnWeb(this SPWeb web, string url)
+{
+    return web.GetList(SPUrlUtility.CombineUrl(web.Url, url));
+}
+
+// use-case
+using(var awardsWeb = site.OpenWeb(AwardsConstants.WebUrls.Awards))
+{
+    var awardsList = awardsWeb.GetListOnWeb(AwardsConstants.ListUrls.AwardsList);
+}
+
+// constants
+public static class ListUrls
+{
+    // ...
+    public static string AwardsList = "Lists/Awards";
+    // ...
+}
+```
+
+### Deleting data
+#### Batch delete
+```c#
+private static StringBuilder BatchCommand(SPList spList)
+{
+    StringBuilder deletebuilder = new StringBuilder();
+    deletebuilder.Append("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Batch>");
+    string command = "<Method><SetList Scope=\"Request\">" + spList.ID +
+        "</SetList><SetVar Name=\"ID\">{0}</SetVar><SetVar Name=\"owsfileref\">{1}</SetVar><SetVar Name=\"Cmd\">Delete</SetVar></Method>";
+
+    foreach (SPListItem item in spList.Items)
+    {
+        deletebuilder.Append(string.Format(command, item.ID.ToString(), item["FileRef"].ToString()));
+    }
+
+    deletebuilder.Append("</Batch>");
+    return deletebuilder;
+}
+```
+
+### Getting items
+
+It is very handy to use lib called Camlex to build CAML-queries for SPList instances
+
+#### All items
+
+!! Don't forget that SharePoint list fits ~5000 items without problems. So you can get them at once, but what happen when there will be more of them - unknown.
+
+Also, for optimization improvements, define set of fields which values you really need to get through `ViewField`, and set flag `ViewFieldOnly` to true during request.
+
+```c#
+// here we use calmex only for building ViewField structure, because we don't need
+// any filter-logic
+var awardsList = awardsWeb.GetListOnWeb(AwardsConstants.ListUrls.AwardsList);
+
+var awardsViewFields = Camlex.Query().ViewFields(new[]
+{
+    "Title",
+    "ID",
+    "FileRef",
+    AwardsConstants.ListFields.AwardCategory.Name,
+    AwardsConstants.ListFields.AwardShowInCard.Name,
+    AwardsConstants.ListFields.AwardShowOnBoard.Name,
+    AwardsConstants.ListFields.AwardWidth.Name,
+    AwardsConstants.ListFields.AwardOrder.Name,
+});
+
+var awardsQuery = new SPQuery()
+{
+    ViewFields = awardsViewFields,
+    ViewFieldsOnly = true,
+    RowLimit = 500
+};
+
+var foundAwards = awardsList.GetItems(awardsQuery).OfType<SPListItem>();
+```
+
+#### Simple filtering
+```c#
+var filterAttribute = SettingsService.GetLocalizedString("TestProject", "VarName_TestVar");
+
+var query = Camlex.Query()
+    .Where(x => (string)x[AwardsConstants.ListFields.Attr1.Guid] == filterAttribute)
+    .ToSPQuery();
+
+var items = list.GetItems(query).OfType<SPListItem>();
+```
+
+#### Filter by user-field
+Here field `Constants.ListFields.AbstractUser.Guid` of type [User](#user)
+```c#
+private SPListItem FindItemsByUser(SPUser user)
+{
+    var query = Camlex.Query().Where(x => x[Constants.ListFields.AbstractUser.Guid] == (DataTypes.LookupId)user.ID.ToString()).ToSPQuery();
+    var items = list.GetItems(query).OfType<SPListItem>();
+    return items.FirstOrDefault();
+}
+```
+
+### Adding/updating items
+```c#
+var item = list.AddItem();
+SPListItem itemForLookup = //...
+SPUser userForLookup = //...
+
+item[Constants.ListFields.Field1.Guid] = value1;
+item[Constants.ListFields.Field2.Guid] = value2;
+item[Constants.ListFields.LookupField1.Guid] = new SPFieldLookupValue(itemForLookup.ID, another.Title);
+item[Constants.ListFields.UserField1.Guid] = userForLookup;
+item.Update();
+```
+
+
+### Resolving field values
+!!! Don't forget to add some null checks
+#### SPUser
+```c#
+SPSite site = //..
+var userFieldValue = listItem[Constants.ListField.UserField1.Guid];
+var userValueResolved = new SPFieldUserValue(site.RootWeb, Convert.ToString(userFieldValue)).User;
+```
+#### LookupValue
+```c#
+var lookupFieldValue = listItem[Constants.ListFields.LookupField1.Guid];
+var lookupValueResolved = new SPFieldLookupValue(Convert.ToString(lookupFieldValue));
+```
+#### DateTime
+```c#
+var dateTimeFieldValue = x[Constants.ListFields.DateTimeField1.Guid];
+var dateTimeValueResolved = Convert.ToDateTime(dateTimeFieldValue);
+```
+
+#### Boolean
+```c#
+var booleanFieldValue = x[Constants.ListFields.BooleanField1.Guid];
+var booleanFieldValueResolved = Convert.ToBoolean(booleanFieldValue); 
+```
+
+#### Number
+```c#
+var numberFieldValue = x[Constants.ListFields.NumberValue1.Guid];
+var numberFieldValueResolved = Convert.ToInt32(numberFieldValue); 
+```
+
+## Working with users
+
+### Adding user claims to web
+Sometimes to get `SPUser` from profile in domain, you need to add his claims on web, especially if he has never been signed-on to the portal (regular case when there is an organization portal and huge base of employees, but not all of them use site).
+
+Use those utils:
+
+```c#
+// usage-case
+SPWeb web = //..
+SPUser user = web.Site.RootWeb.AllUsers.OfType<SPUser>()
+    .FirstOrDefault(x => x.GetLoginNameWithoutClaim() == login);
+
+if(user == null)
+{
+    user = web.Site.RootWeb.EnsureUserIgnoreClaim(login);
+}
+
+return user;
+
+
+// <<<<<<<<<<<<<< UTILS
+
+// GetLoginNameWithoutClaim
+public static string GetLoginNameWithoutClaim(string loginName)
+{
+    SPClaimProviderManager mgr = SPClaimProviderManager.Local;
+    if (mgr != null && SPClaimProviderManager.IsEncodedClaim(loginName))
+    {
+        loginName = mgr.DecodeClaim(loginName).Value;
+    }
+
+    return loginName;
+}
+
+// GetLoginNameWithoutClaim
+public static string GetLoginNameWithoutClaim(this SPUser user)
+{
+    if(user == null)
+    {
+        return string.Empty;
+    }
+
+    string loginName = user.LoginName;
+    return GetLoginNameWithoutClaim(loginName);
+}
+
+// EnsureUserIgnoreClaim
+public static SPUser EnsureUserIgnoreClaim(this SPWeb web, string login)
+{
+    if (!SPClaimProviderManager.IsEncodedClaim(login))
+    {
+        string xmlTypeForString = "http://www.w3.org/2001/XMLSchema#string";
+        // This will depend on your own implementation
+        string originalIssuer = SPOriginalIssuers.Format(SPOriginalIssuerType.Windows);
+
+        SPClaim claim = new SPClaim(SPClaimTypes.UserLogonName, login, xmlTypeForString, originalIssuer);
+        login = SPClaimProviderManager.Local.EncodeClaim(claim);
+    }
+
+    web.AllowUnsafeUpdates = true;
+    return web.EnsureUser(login);
+}
+```
+
+### Getting name without domain
+
+```c#
+private string RemoveDomain(string loginName)
+{
+    return Regex.Replace(loginName, ".*\\\\(.*)", "$1", RegexOptions.None);
+}
+
+private string NormalizeLogin(string login)
+{
+    return RemoveDomain(login).ToLower();
+}
+```
+
+## TimerJobs
+
+### Feature activation
+
+Sometimes features which add timer jobs need more privileges, and it is hard to activate them through web-interface of sharepoint.
+
+Use command line tool instead:
+
+```powershell
+Enable-SPFeature -Identity 7963da41-9066-493f-adbf-a9f7d43ed94b -Url http://sp2019/
+```
+
+## Unit testing
+
+Make sure you have changed processor architecture to appropriate:
+
+![](pic/test-arch.png)
+
+### Running test case
+If your service needs web or site, make instances like so:
+```c#
+// helper-class
+private void RunInWeb(string webUrl, Action<SPSite, SPWeb> fun)
+{
+    using(SPSite site = new SPSite(webUrl, SPUserToken.SystemAccount))
+    {
+        using (SPWeb web = site.OpenWeb())
+        {
+            fun(site, web);
+        }
+    }
+}
+
+// usage in test-case
+[TestMethod]
+public void TestSeedVeterans()
+{
+    var fileContent = File.ReadAllText(@"C:\temp\get-all-employees.json");
+    var allEmployees = JsonConvert.DeserializeObject<EmployeesSearchResult>(fileContent);
+
+    this.RunInWeb(_webUrl, (site, web) =>
+    {
+        var seededItems = _srvc.SeedVeterans(web, allEmployees);
+        Assert.AreNotEqual(0, seededItems);
+    });
 }
 ```
