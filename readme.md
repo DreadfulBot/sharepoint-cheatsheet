@@ -49,6 +49,8 @@
     - [Feature activation](#feature-activation)
   - [Unit testing](#unit-testing)
     - [Running test case](#running-test-case)
+    - [Solution deployment](#solution-deployment)
+      - [Fast gac install](#fast-gac-install)
 
 ---
 
@@ -676,3 +678,14 @@ public void TestSeedVeterans()
     });
 }
 ```
+
+### Solution deployment
+#### Fast gac install
+
+Use file `scripts/gac-install-(4.8).ps` for adding dll by path and restarting working pools and Sharepoint timer service.
+
+Also, if you want to use it as external tool for VS, do command:
+1. _Title_: GacInstall
+2. _Command_: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+3. _Arguments_:  -file "C:\scripts\gac-install\gac-install-4.8.ps1" $(TargetPath)
+4. Check _Use Output window_
