@@ -643,6 +643,15 @@ Use command line tool instead:
 Enable-SPFeature -Identity 7963da41-9066-493f-adbf-a9f7d43ed94b -Url http://sp2019/
 ```
 
+If you get error "Access denied" while activating feature from web interface, add this to *TimeJob* code:
+
+``` C#
+protected override bool HasAdditionalUpdateAccess()
+{
+    return true;
+}
+```
+
 ## Unit testing
 
 Make sure you have changed processor architecture to appropriate:
